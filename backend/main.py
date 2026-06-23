@@ -5,18 +5,30 @@ from dotenv import load_dotenv
 from groq import Groq
 from rag.scraper import scrape_website
 import os
+import logging
+from typing import Literal
 
 load_dotenv()
 
-client = Groq(
-    api_key=os.getenv("GROQ_API_KEY")
-)
+logger = logging.getLogger(__name__)
+
+GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+if not GROQ_API_KEY:
+    logger.warning(
+        "GROQ_API_KEY is not set. The /chat endpoint will not work."
+    )
+
+client = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
 
 app = FastAPI()
 
+ALLOWED_ORIGINS = os.getenv(
+    "ALLOWED_ORIGINS", "http://localhost:3000"
+).split(",")
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=ALLOWED_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -27,8 +39,13 @@ app.add_middleware(
 # MODELS
 # =========================
 
+class ChatMessage(BaseModel):
+    role: Literal["user", "assistant"]
+    content: str
+
+
 class ChatRequest(BaseModel):
-    message: str
+    messages: list[ChatMessage]
 
 
 class TrainRequest(BaseModel):
@@ -52,28 +69,40 @@ async def home():
 
 @app.post("/chat")
 async def chat(req: ChatRequest):
+    if client is None:
+        raise HTTPException(
+            status_code=503,
+            detail="Chat service unavailable: GROQ_API_KEY not configured.",
+        )
+
+    if not req.messages:
+        raise HTTPException(
+            status_code=400,
+            detail="Messages list cannot be empty.",
+        )
+
     try:
+        conversation = [
+            {"role": m.role, "content": m.content}
+            for m in req.messages
+        ]
 
         completion = client.chat.completions.create(
             model="llama-3.3-70b-versatile",
-            messages=[
-                {
-                    "role": "user",
-                    "content": req.message
-                }
-            ],
+            messages=conversation,
             temperature=0.7,
-            max_tokens=1024
+            max_tokens=1024,
         )
 
         return {
             "response": completion.choices[0].message.content
         }
 
-    except Exception as e:
+    except Exception:
+        logger.exception("Chat completion failed")
         raise HTTPException(
             status_code=500,
-            detail=str(e)
+            detail="An internal error occurred. Please try again later.",
         )
 
 
@@ -93,8 +122,9 @@ async def train(req: TrainRequest):
             "preview": content[:1000]
         }
 
-    except Exception as e:
+    except Exception:
+        logger.exception("Training/scrape failed for URL: %s", req.url)
         raise HTTPException(
             status_code=500,
-            detail=str(e)
+            detail="Failed to scrape the provided URL.",
         )

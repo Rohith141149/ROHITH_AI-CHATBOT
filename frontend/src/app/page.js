@@ -2,6 +2,8 @@
 
 import { useState, useRef, useEffect } from "react";
 
+const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000";
+
 export default function Home() {
   const [message, setMessage] = useState("");
   const [messages, setMessages] = useState([]);
@@ -41,7 +43,7 @@ export default function Home() {
         content: msg.text,
       }));
 
-      const response = await fetch("http://127.0.0.1:8000/chat", {
+      const response = await fetch(`${API_URL}/chat`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -51,22 +53,34 @@ export default function Home() {
         }),
       });
 
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => null);
+        throw new Error(
+          errorData?.detail || `Server error (${response.status})`
+        );
+      }
+
       const data = await response.json();
 
       const aiMessage = {
         role: "assistant",
-        text: data.response,
+        text: data.response || "No response received.",
       };
 
       setMessages((prev) => [...prev, aiMessage]);
     } catch (error) {
       console.error(error);
 
+      const errorText =
+        error.message === "Failed to fetch"
+          ? "Unable to connect to backend."
+          : error.message || "Something went wrong.";
+
       setMessages((prev) => [
         ...prev,
         {
           role: "assistant",
-          text: "❌ Unable to connect to backend.",
+          text: `Error: ${errorText}`,
         },
       ]);
     } finally {
