@@ -1,6 +1,12 @@
 "use client";
 
 import { useState, useRef, useEffect } from "react";
+import { postChat } from "./utils/api";
+import {
+  createUserMessage,
+  createAssistantMessage,
+  toConversationHistory,
+} from "./utils/messages";
 
 export default function Home() {
   const [isOpen, setIsOpen] = useState(false);
@@ -27,52 +33,22 @@ export default function Home() {
   const sendMessage = async () => {
     if (!message.trim() || loading) return;
 
-    const currentMessage = message;
-
-    const userMessage = {
-      role: "user",
-      text: currentMessage,
-    };
-
-    const updatedMessages = [...messages, userMessage];
+    const userMsg = createUserMessage(message);
+    const updatedMessages = [...messages, userMsg];
 
     setMessages(updatedMessages);
     setMessage("");
     setLoading(true);
 
     try {
-      const conversationHistory = updatedMessages.map((msg) => ({
-        role: msg.role === "assistant" ? "assistant" : "user",
-        content: msg.text,
-      }));
-
-      const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000"}/chat`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          messages: conversationHistory,
-        }),
-      });
-
-      const data = await response.json();
-
-      const aiMessage = {
-        role: "assistant",
-        text: data.response,
-      };
-
-      setMessages((prev) => [...prev, aiMessage]);
+      const conversationHistory = toConversationHistory(updatedMessages);
+      const data = await postChat(conversationHistory);
+      setMessages((prev) => [...prev, createAssistantMessage(data.response)]);
     } catch (error) {
       console.error(error);
-
       setMessages((prev) => [
         ...prev,
-        {
-          role: "assistant",
-          text: "Unable to connect to backend.",
-        },
+        createAssistantMessage("Unable to connect to backend."),
       ]);
     } finally {
       setLoading(false);
