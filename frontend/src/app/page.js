@@ -2,11 +2,14 @@
 
 import { useState, useRef, useEffect } from "react";
 
+const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000";
+
 export default function Home() {
   const [isOpen, setIsOpen] = useState(false);
   const [message, setMessage] = useState("");
   const [messages, setMessages] = useState([]);
   const [loading, setLoading] = useState(false);
+  const [backendStatus, setBackendStatus] = useState("checking"); // "online", "offline", "checking"
 
   const bottomRef = useRef(null);
 
@@ -15,6 +18,20 @@ export default function Home() {
       behavior: "smooth",
     });
   }, [messages, loading]);
+
+  // Check backend connectivity when widget opens
+  useEffect(() => {
+    if (!isOpen) return;
+    const checkBackend = async () => {
+      try {
+        const res = await fetch(`${API_URL}/`, { method: "GET" });
+        setBackendStatus(res.ok ? "online" : "offline");
+      } catch {
+        setBackendStatus("offline");
+      }
+    };
+    checkBackend();
+  }, [isOpen]);
 
   const toggleChat = () => {
     setIsOpen(!isOpen);
@@ -41,18 +58,13 @@ export default function Home() {
     setLoading(true);
 
     try {
-      const conversationHistory = updatedMessages.map((msg) => ({
-        role: msg.role === "assistant" ? "assistant" : "user",
-        content: msg.text,
-      }));
-
-      const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000"}/chat`, {
+      const response = await fetch(`${API_URL}/chat`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          messages: conversationHistory,
+          message: currentMessage,
         }),
       });
 
@@ -66,12 +78,13 @@ export default function Home() {
       setMessages((prev) => [...prev, aiMessage]);
     } catch (error) {
       console.error(error);
+      setBackendStatus("offline");
 
       setMessages((prev) => [
         ...prev,
         {
-          role: "assistant",
-          text: "Unable to connect to backend.",
+          role: "error",
+          text: "Could not reach the server. Please make sure the backend is running.",
         },
       ]);
     } finally {
@@ -127,7 +140,12 @@ export default function Home() {
                   />
                 </svg>
               </div>
-              <span className="font-semibold text-sm">Rohith AI Assistant</span>
+              <div className="flex flex-col">
+                <span className="font-semibold text-sm">Rohith AI Assistant</span>
+                <span className={`text-[10px] leading-tight ${backendStatus === "online" ? "text-green-200" : backendStatus === "offline" ? "text-red-200" : "text-blue-200"}`}>
+                  {backendStatus === "online" ? "Online" : backendStatus === "offline" ? "Offline - Backend not connected" : "Connecting..."}
+                </span>
+              </div>
             </div>
             <div className="flex items-center gap-1">
               <button
@@ -210,10 +228,26 @@ export default function Home() {
                   className={`max-w-[80%] px-3 py-2 rounded-2xl text-sm whitespace-pre-wrap ${
                     msg.role === "user"
                       ? "bg-blue-600 text-white rounded-br-md"
+                      : msg.role === "error"
+                      ? "bg-red-50 dark:bg-red-900/30 text-red-700 dark:text-red-300 border border-red-200 dark:border-red-800 rounded-bl-md"
                       : "bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-200 border border-gray-200 dark:border-gray-700 rounded-bl-md"
                   }`}
                 >
                   {msg.text}
+                  {msg.role === "error" && (
+                    <button
+                      onClick={() => {
+                        setMessages((prev) => prev.filter((_, i) => i !== index));
+                        setBackendStatus("checking");
+                        fetch(`${API_URL}/`)
+                          .then((r) => setBackendStatus(r.ok ? "online" : "offline"))
+                          .catch(() => setBackendStatus("offline"));
+                      }}
+                      className="block mt-1.5 text-xs text-red-600 dark:text-red-400 underline hover:no-underline"
+                    >
+                      Dismiss &amp; retry connection
+                    </button>
+                  )}
                 </div>
               </div>
             ))}

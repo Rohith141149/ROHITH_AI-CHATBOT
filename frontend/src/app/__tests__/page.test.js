@@ -2,11 +2,36 @@ import { render, screen, fireEvent, waitFor, act } from "@testing-library/react"
 import "@testing-library/jest-dom";
 import Home from "../page";
 
-// Mock fetch globally
+// Mock fetch globally with URL-aware responses
 global.fetch = jest.fn();
+
+function mockFetch(chatResponse) {
+  global.fetch.mockImplementation((url, options) => {
+    // Health check (GET /)
+    if (!options || options.method === "GET" || url.endsWith("/")) {
+      return Promise.resolve({ ok: true, json: async () => ({ message: "ok" }) });
+    }
+    // Chat endpoint
+    if (chatResponse instanceof Error) {
+      return Promise.reject(chatResponse);
+    }
+    return Promise.resolve({
+      ok: true,
+      json: async () => chatResponse,
+    });
+  });
+}
+
+function mockFetchOffline() {
+  global.fetch.mockImplementation(() => {
+    return Promise.reject(new Error("Network error"));
+  });
+}
 
 beforeEach(() => {
   jest.clearAllMocks();
+  // Default: health check succeeds, chat not mocked
+  mockFetch({ response: "default reply" });
 });
 
 describe("Home (ChatWidget)", () => {
@@ -24,37 +49,42 @@ describe("Home (ChatWidget)", () => {
   });
 
   describe("Chat widget toggle", () => {
-    it("opens the chat window when toggle button is clicked", () => {
+    it("opens the chat window when toggle button is clicked", async () => {
       render(<Home />);
-      const toggleBtn = screen.getByRole("button", { name: /open chat/i });
-      fireEvent.click(toggleBtn);
+      await act(async () => {
+        fireEvent.click(screen.getByRole("button", { name: /open chat/i }));
+      });
       expect(screen.getByText("Rohith AI Assistant")).toBeInTheDocument();
     });
 
-    it("closes the chat window when close button is clicked", () => {
+    it("closes the chat window when close button is clicked", async () => {
       render(<Home />);
-      fireEvent.click(screen.getByRole("button", { name: /open chat/i }));
+      await act(async () => {
+        fireEvent.click(screen.getByRole("button", { name: /open chat/i }));
+      });
       expect(screen.getByText("Rohith AI Assistant")).toBeInTheDocument();
 
       fireEvent.click(screen.getByRole("button", { name: /close chat/i }));
       expect(screen.queryByText("Rohith AI Assistant")).not.toBeInTheDocument();
     });
 
-    it("shows placeholder text when chat is open and empty", () => {
+    it("shows placeholder text when chat is open and empty", async () => {
       render(<Home />);
-      fireEvent.click(screen.getByRole("button", { name: /open chat/i }));
+      await act(async () => {
+        fireEvent.click(screen.getByRole("button", { name: /open chat/i }));
+      });
       expect(screen.getByText(/ask me anything/i)).toBeInTheDocument();
     });
   });
 
   describe("Sending messages", () => {
     it("sends a message and shows user bubble", async () => {
-      global.fetch.mockResolvedValueOnce({
-        json: async () => ({ response: "AI reply" }),
-      });
+      mockFetch({ response: "AI reply" });
 
       render(<Home />);
-      fireEvent.click(screen.getByRole("button", { name: /open chat/i }));
+      await act(async () => {
+        fireEvent.click(screen.getByRole("button", { name: /open chat/i }));
+      });
 
       const input = screen.getByPlaceholderText(/type your message/i);
 
@@ -67,12 +97,12 @@ describe("Home (ChatWidget)", () => {
     });
 
     it("shows AI response after sending message", async () => {
-      global.fetch.mockResolvedValueOnce({
-        json: async () => ({ response: "AI reply" }),
-      });
+      mockFetch({ response: "AI reply" });
 
       render(<Home />);
-      fireEvent.click(screen.getByRole("button", { name: /open chat/i }));
+      await act(async () => {
+        fireEvent.click(screen.getByRole("button", { name: /open chat/i }));
+      });
 
       const input = screen.getByPlaceholderText(/type your message/i);
 
@@ -87,10 +117,12 @@ describe("Home (ChatWidget)", () => {
     });
 
     it("shows error message when fetch fails", async () => {
-      global.fetch.mockRejectedValueOnce(new Error("Network error"));
+      mockFetchOffline();
 
       render(<Home />);
-      fireEvent.click(screen.getByRole("button", { name: /open chat/i }));
+      await act(async () => {
+        fireEvent.click(screen.getByRole("button", { name: /open chat/i }));
+      });
 
       const input = screen.getByPlaceholderText(/type your message/i);
 
@@ -101,18 +133,18 @@ describe("Home (ChatWidget)", () => {
 
       await waitFor(() => {
         expect(
-          screen.getByText(/unable to connect/i)
+          screen.getByText(/could not reach the server/i)
         ).toBeInTheDocument();
       });
     });
 
     it("clears input after sending", async () => {
-      global.fetch.mockResolvedValueOnce({
-        json: async () => ({ response: "reply" }),
-      });
+      mockFetch({ response: "reply" });
 
       render(<Home />);
-      fireEvent.click(screen.getByRole("button", { name: /open chat/i }));
+      await act(async () => {
+        fireEvent.click(screen.getByRole("button", { name: /open chat/i }));
+      });
 
       const input = screen.getByPlaceholderText(/type your message/i);
 
@@ -124,24 +156,41 @@ describe("Home (ChatWidget)", () => {
       expect(input.value).toBe("");
     });
 
-    it("does not send empty messages", () => {
+    it("does not send empty messages", async () => {
+      const fetchCalls = [];
+      global.fetch.mockImplementation((url, options) => {
+        fetchCalls.push({ url, options });
+        return Promise.resolve({ ok: true, json: async () => ({ message: "ok" }) });
+      });
+
       render(<Home />);
-      fireEvent.click(screen.getByRole("button", { name: /open chat/i }));
+      await act(async () => {
+        fireEvent.click(screen.getByRole("button", { name: /open chat/i }));
+      });
+
+      const healthCheckCount = fetchCalls.length;
 
       const input = screen.getByPlaceholderText(/type your message/i);
       fireEvent.change(input, { target: { value: "   " } });
       fireEvent.click(screen.getByRole("button", { name: /send/i }));
 
-      expect(global.fetch).not.toHaveBeenCalled();
+      // No additional fetch calls beyond the health check
+      expect(fetchCalls.length).toBe(healthCheckCount);
     });
 
     it("sends message on Enter key press", async () => {
-      global.fetch.mockResolvedValueOnce({
-        json: async () => ({ response: "reply" }),
+      const fetchCalls = [];
+      global.fetch.mockImplementation((url, options) => {
+        fetchCalls.push({ url, options });
+        return Promise.resolve({ ok: true, json: async () => ({ response: "reply" }) });
       });
 
       render(<Home />);
-      fireEvent.click(screen.getByRole("button", { name: /open chat/i }));
+      await act(async () => {
+        fireEvent.click(screen.getByRole("button", { name: /open chat/i }));
+      });
+
+      const healthCheckCount = fetchCalls.length;
 
       const input = screen.getByPlaceholderText(/type your message/i);
 
@@ -150,18 +199,19 @@ describe("Home (ChatWidget)", () => {
         fireEvent.keyDown(input, { key: "Enter" });
       });
 
-      expect(global.fetch).toHaveBeenCalled();
+      // Additional fetch call made for the chat message
+      expect(fetchCalls.length).toBeGreaterThan(healthCheckCount);
     });
   });
 
   describe("Clear chat", () => {
     it("clears all messages when clear button is clicked", async () => {
-      global.fetch.mockResolvedValueOnce({
-        json: async () => ({ response: "AI reply" }),
-      });
+      mockFetch({ response: "AI reply" });
 
       render(<Home />);
-      fireEvent.click(screen.getByRole("button", { name: /open chat/i }));
+      await act(async () => {
+        fireEvent.click(screen.getByRole("button", { name: /open chat/i }));
+      });
 
       const input = screen.getByPlaceholderText(/type your message/i);
 
@@ -185,15 +235,20 @@ describe("Home (ChatWidget)", () => {
 
   describe("Loading state", () => {
     it("shows typing indicator while waiting for response", async () => {
-      let resolvePromise;
-      global.fetch.mockReturnValueOnce(
-        new Promise((resolve) => {
-          resolvePromise = resolve;
-        })
-      );
+      let resolveChat;
+      global.fetch.mockImplementation((url, options) => {
+        if (!options || options.method === "GET" || url.endsWith("/")) {
+          return Promise.resolve({ ok: true, json: async () => ({ message: "ok" }) });
+        }
+        return new Promise((resolve) => {
+          resolveChat = resolve;
+        });
+      });
 
       render(<Home />);
-      fireEvent.click(screen.getByRole("button", { name: /open chat/i }));
+      await act(async () => {
+        fireEvent.click(screen.getByRole("button", { name: /open chat/i }));
+      });
 
       const input = screen.getByPlaceholderText(/type your message/i);
 
@@ -205,20 +260,25 @@ describe("Home (ChatWidget)", () => {
       expect(screen.getByText(/typing/i)).toBeInTheDocument();
 
       await act(async () => {
-        resolvePromise({ json: async () => ({ response: "Done" }) });
+        resolveChat({ ok: true, json: async () => ({ response: "Done" }) });
       });
     });
 
     it("disables send button while loading", async () => {
-      let resolvePromise;
-      global.fetch.mockReturnValueOnce(
-        new Promise((resolve) => {
-          resolvePromise = resolve;
-        })
-      );
+      let resolveChat;
+      global.fetch.mockImplementation((url, options) => {
+        if (!options || options.method === "GET" || url.endsWith("/")) {
+          return Promise.resolve({ ok: true, json: async () => ({ message: "ok" }) });
+        }
+        return new Promise((resolve) => {
+          resolveChat = resolve;
+        });
+      });
 
       render(<Home />);
-      fireEvent.click(screen.getByRole("button", { name: /open chat/i }));
+      await act(async () => {
+        fireEvent.click(screen.getByRole("button", { name: /open chat/i }));
+      });
 
       const input = screen.getByPlaceholderText(/type your message/i);
 
@@ -231,7 +291,35 @@ describe("Home (ChatWidget)", () => {
       expect(sendBtn).toBeDisabled();
 
       await act(async () => {
-        resolvePromise({ json: async () => ({ response: "Done" }) });
+        resolveChat({ ok: true, json: async () => ({ response: "Done" }) });
+      });
+    });
+  });
+
+  describe("Backend status", () => {
+    it("shows Online status when backend is reachable", async () => {
+      mockFetch({ response: "reply" });
+
+      render(<Home />);
+      await act(async () => {
+        fireEvent.click(screen.getByRole("button", { name: /open chat/i }));
+      });
+
+      await waitFor(() => {
+        expect(screen.getByText("Online")).toBeInTheDocument();
+      });
+    });
+
+    it("shows Offline status when backend is unreachable", async () => {
+      mockFetchOffline();
+
+      render(<Home />);
+      await act(async () => {
+        fireEvent.click(screen.getByRole("button", { name: /open chat/i }));
+      });
+
+      await waitFor(() => {
+        expect(screen.getByText(/offline/i)).toBeInTheDocument();
       });
     });
   });

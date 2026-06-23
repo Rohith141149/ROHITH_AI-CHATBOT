@@ -1,5 +1,5 @@
 import pytest
-from unittest.mock import patch, MagicMock, AsyncMock
+from unittest.mock import patch, MagicMock
 from httpx import AsyncClient, ASGITransport
 
 from main import app, ChatRequest, TrainRequest
@@ -72,7 +72,7 @@ class TestChatEndpoint:
             response = await ac.post("/chat", json={"message": "Hi"})
 
         assert response.status_code == 500
-        assert "API error" in response.json()["detail"]
+        assert "internal error" in response.json()["detail"].lower()
 
     async def test_chat_rejects_missing_message(self, mock_groq_client):
         transport = ASGITransport(app=app)
@@ -97,8 +97,9 @@ class TestChatEndpoint:
 class TestTrainEndpoint:
     """Tests for the POST /train endpoint."""
 
+    @patch("main._validate_url", return_value="https://example.com")
     @patch("main.scrape_website")
-    async def test_train_returns_scraped_content(self, mock_scrape):
+    async def test_train_returns_scraped_content(self, mock_scrape, mock_validate):
         mock_scrape.return_value = "Hello " * 500  # 3000 chars
 
         transport = ASGITransport(app=app)
@@ -113,8 +114,9 @@ class TestTrainEndpoint:
         assert data["characters"] == 3000
         assert len(data["preview"]) <= 1000
 
+    @patch("main._validate_url", return_value="https://example.com")
     @patch("main.scrape_website")
-    async def test_train_calls_scraper_with_url(self, mock_scrape):
+    async def test_train_calls_scraper_with_url(self, mock_scrape, mock_validate):
         mock_scrape.return_value = "content"
 
         transport = ASGITransport(app=app)
@@ -125,8 +127,9 @@ class TestTrainEndpoint:
 
         mock_scrape.assert_called_once_with("https://example.com")
 
+    @patch("main._validate_url", return_value="https://example.com")
     @patch("main.scrape_website")
-    async def test_train_returns_500_on_scraper_error(self, mock_scrape):
+    async def test_train_returns_500_on_scraper_error(self, mock_scrape, mock_validate):
         mock_scrape.side_effect = Exception("Scraping failed")
 
         transport = ASGITransport(app=app)
@@ -136,7 +139,7 @@ class TestTrainEndpoint:
             )
 
         assert response.status_code == 500
-        assert "Scraping failed" in response.json()["detail"]
+        assert "scrape" in response.json()["detail"].lower()
 
     async def test_train_rejects_missing_url(self):
         transport = ASGITransport(app=app)
@@ -145,8 +148,9 @@ class TestTrainEndpoint:
 
         assert response.status_code == 422
 
+    @patch("main._validate_url", return_value="https://example.com")
     @patch("main.scrape_website")
-    async def test_train_preview_limited_to_1000_chars(self, mock_scrape):
+    async def test_train_preview_limited_to_1000_chars(self, mock_scrape, mock_validate):
         mock_scrape.return_value = "x" * 5000
 
         transport = ASGITransport(app=app)
@@ -158,6 +162,16 @@ class TestTrainEndpoint:
         data = response.json()
         assert len(data["preview"]) == 1000
         assert data["characters"] == 5000
+
+    async def test_train_rejects_non_http_url(self):
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as ac:
+            response = await ac.post(
+                "/train", json={"url": "ftp://example.com/file"}
+            )
+
+        assert response.status_code == 400
+        assert "http" in response.json()["detail"].lower()
 
 
 class TestModels:
