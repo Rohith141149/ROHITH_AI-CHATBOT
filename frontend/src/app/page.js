@@ -51,7 +51,24 @@ export default function Home() {
         }),
       });
 
+      if (!response.ok) {
+        let errorDetail = `Server error (${response.status})`;
+        try {
+          const errorData = await response.json();
+          if (errorData.detail) {
+            errorDetail = errorData.detail;
+          }
+        } catch {
+          // Response body was not valid JSON; use the generic message
+        }
+        throw new Error(errorDetail);
+      }
+
       const data = await response.json();
+
+      if (!data.response) {
+        throw new Error("Received an empty response from the AI service.");
+      }
 
       const aiMessage = {
         role: "assistant",
@@ -60,13 +77,18 @@ export default function Home() {
 
       setMessages((prev) => [...prev, aiMessage]);
     } catch (error) {
-      console.error(error);
+      console.error("Chat error:", error);
+
+      const errorText =
+        error instanceof TypeError
+          ? "❌ Unable to connect to the backend. Please check if the server is running."
+          : `❌ ${error.message}`;
 
       setMessages((prev) => [
         ...prev,
         {
           role: "assistant",
-          text: "❌ Unable to connect to backend.",
+          text: errorText,
         },
       ]);
     } finally {
