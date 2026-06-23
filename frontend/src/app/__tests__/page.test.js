@@ -50,6 +50,7 @@ describe("Home (ChatWidget)", () => {
   describe("Sending messages", () => {
     it("sends a message and shows user bubble", async () => {
       global.fetch.mockResolvedValueOnce({
+        ok: true,
         json: async () => ({ response: "AI reply" }),
       });
 
@@ -68,6 +69,7 @@ describe("Home (ChatWidget)", () => {
 
     it("shows AI response after sending message", async () => {
       global.fetch.mockResolvedValueOnce({
+        ok: true,
         json: async () => ({ response: "AI reply" }),
       });
 
@@ -87,7 +89,7 @@ describe("Home (ChatWidget)", () => {
     });
 
     it("shows error message when fetch fails", async () => {
-      global.fetch.mockRejectedValueOnce(new Error("Network error"));
+      global.fetch.mockRejectedValueOnce(new Error("Failed to fetch"));
 
       render(<Home />);
       fireEvent.click(screen.getByRole("button", { name: /open chat/i }));
@@ -101,13 +103,14 @@ describe("Home (ChatWidget)", () => {
 
       await waitFor(() => {
         expect(
-          screen.getByText(/unable to connect/i)
+          screen.getByText(/unable to connect to backend/i)
         ).toBeInTheDocument();
       });
     });
 
     it("clears input after sending", async () => {
       global.fetch.mockResolvedValueOnce({
+        ok: true,
         json: async () => ({ response: "reply" }),
       });
 
@@ -137,6 +140,7 @@ describe("Home (ChatWidget)", () => {
 
     it("sends message on Enter key press", async () => {
       global.fetch.mockResolvedValueOnce({
+        ok: true,
         json: async () => ({ response: "reply" }),
       });
 
@@ -157,6 +161,7 @@ describe("Home (ChatWidget)", () => {
   describe("Clear chat", () => {
     it("clears all messages when clear button is clicked", async () => {
       global.fetch.mockResolvedValueOnce({
+        ok: true,
         json: async () => ({ response: "AI reply" }),
       });
 
@@ -205,7 +210,7 @@ describe("Home (ChatWidget)", () => {
       expect(screen.getByText(/typing/i)).toBeInTheDocument();
 
       await act(async () => {
-        resolvePromise({ json: async () => ({ response: "Done" }) });
+        resolvePromise({ ok: true, json: async () => ({ response: "Done" }) });
       });
     });
 
@@ -231,7 +236,7 @@ describe("Home (ChatWidget)", () => {
       expect(sendBtn).toBeDisabled();
 
       await act(async () => {
-        resolvePromise({ json: async () => ({ response: "Done" }) });
+        resolvePromise({ ok: true, json: async () => ({ response: "Done" }) });
       });
     });
   });

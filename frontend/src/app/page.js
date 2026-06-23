@@ -5,6 +5,7 @@ import { postChat } from "./utils/api";
 import {
   createUserMessage,
   createAssistantMessage,
+  createErrorMessage,
   toConversationHistory,
 } from "./utils/messages";
 
@@ -46,9 +47,13 @@ export default function Home() {
       setMessages((prev) => [...prev, createAssistantMessage(data.response)]);
     } catch (error) {
       console.error(error);
+      const errorText =
+        error.message === "Failed to fetch"
+          ? "Unable to connect to backend."
+          : error.message || "Something went wrong.";
       setMessages((prev) => [
         ...prev,
-        createAssistantMessage("Unable to connect to backend."),
+        createErrorMessage(errorText),
       ]);
     } finally {
       setLoading(false);
