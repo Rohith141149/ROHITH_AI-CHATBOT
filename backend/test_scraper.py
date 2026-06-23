@@ -1,4 +1,5 @@
 from rag.scraper import scrape_website, ScraperError
+from utils import content_summary
 
 url = "https://www.westernunion.com"
 
@@ -11,8 +12,10 @@ except Exception as exc:
     print(f"\nUnexpected error: {exc}")
     raise SystemExit(1)
 
+summary = content_summary(content, preview_length=3000)
+
 print("\nWebsite Content Preview:\n")
-print(content[:3000])
+print(summary["preview"])
 
 print("\n")
-print("Total Characters:", len(content))
+print("Total Characters:", summary["characters"])

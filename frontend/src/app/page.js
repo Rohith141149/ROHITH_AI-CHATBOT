@@ -1,6 +1,12 @@
 "use client";
 
 import { useState, useRef, useEffect } from "react";
+import { postChat, ApiError } from "./utils/api";
+import {
+  createUserMessage,
+  createAssistantMessage,
+  toConversationHistory,
+} from "./utils/messages";
 
 export default function Home() {
   const [isOpen, setIsOpen] = useState(false);
@@ -27,74 +33,33 @@ export default function Home() {
   const sendMessage = async () => {
     if (!message.trim() || loading) return;
 
-    const currentMessage = message;
-
-    const userMessage = {
-      role: "user",
-      text: currentMessage,
-    };
-
-    const updatedMessages = [...messages, userMessage];
+    const userMsg = createUserMessage(message);
+    const updatedMessages = [...messages, userMsg];
 
     setMessages(updatedMessages);
     setMessage("");
     setLoading(true);
 
     try {
-      const conversationHistory = updatedMessages.map((msg) => ({
-        role: msg.role === "assistant" ? "assistant" : "user",
-        content: msg.text,
-      }));
-
-      const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000"}/chat`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          messages: conversationHistory,
-        }),
-      });
-
-      if (!response.ok) {
-        let errorDetail = `Server error (${response.status})`;
-        try {
-          const errorData = await response.json();
-          if (errorData.detail) {
-            errorDetail = errorData.detail;
-          }
-        } catch {
-          // Response body was not valid JSON; use the generic message
-        }
-        throw new Error(errorDetail);
-      }
-
-      const data = await response.json();
-
-      if (!data.response) {
-        throw new Error("Received an empty response from the AI service.");
-      }
-
-      const aiMessage = {
-        role: "assistant",
-        text: data.response,
-      };
-
-      setMessages((prev) => [...prev, aiMessage]);
+      const conversationHistory = toConversationHistory(updatedMessages);
+      const data = await postChat(conversationHistory);
+      setMessages((prev) => [...prev, createAssistantMessage(data.response)]);
     } catch (error) {
       console.error("Chat error:", error);
 
-      const errorText =
-        error instanceof TypeError
-          ? "❌ Unable to connect to the backend. Please check if the server is running."
-          : `❌ ${error.message}`;
+      let errorText;
+      if (error instanceof ApiError) {
+        errorText = error.message;
+      } else if (error instanceof TypeError) {
+        errorText =
+          "Unable to connect to the backend. Please check if the server is running.";
+      } else {
+        errorText = error.message || "An unexpected error occurred.";
+      }
 
       setMessages((prev) => [
         ...prev,
-        {
-          role: "assistant",
-          text: errorText,
-        },
+        createAssistantMessage(errorText),
       ]);
     } finally {
       setLoading(false);

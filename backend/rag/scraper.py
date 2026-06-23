@@ -3,9 +3,14 @@ import logging
 import requests
 from bs4 import BeautifulSoup
 
-logger = logging.getLogger(__name__)
+from config import (
+    SCRAPER_MAX_RESPONSE_SIZE,
+    SCRAPER_STRIP_TAGS,
+    SCRAPER_TIMEOUT,
+    SCRAPER_USER_AGENT,
+)
 
-MAX_RESPONSE_SIZE = 5 * 1024 * 1024  # 5 MB
+logger = logging.getLogger(__name__)
 
 
 class ScraperError(Exception):
@@ -32,14 +37,14 @@ def scrape_website(url: str) -> str:
     try:
         response = requests.get(
             url,
-            timeout=15,
-            headers={"User-Agent": "RohithAIChatbot/1.0"},
+            timeout=SCRAPER_TIMEOUT,
+            headers={"User-Agent": SCRAPER_USER_AGENT},
             stream=True,
         )
     except requests.exceptions.Timeout:
         logger.error("Request timed out for URL: %s", url)
         raise ScraperNetworkError(
-            f"Request timed out after 15 seconds: {url}"
+            f"Request timed out after {SCRAPER_TIMEOUT} seconds: {url}"
         )
     except requests.exceptions.ConnectionError as exc:
         logger.error("Connection failed for URL %s: %s", url, exc)
@@ -66,14 +71,14 @@ def scrape_website(url: str) -> str:
         )
 
     content_length = response.headers.get("Content-Length")
-    if content_length and int(content_length) > MAX_RESPONSE_SIZE:
+    if content_length and int(content_length) > SCRAPER_MAX_RESPONSE_SIZE:
         raise ScraperSizeError("Response too large to process.")
 
     chunks = []
     size = 0
     for chunk in response.iter_content(chunk_size=8192, decode_unicode=True):
         size += len(chunk)
-        if size > MAX_RESPONSE_SIZE:
+        if size > SCRAPER_MAX_RESPONSE_SIZE:
             raise ScraperSizeError("Response too large to process.")
         chunks.append(chunk)
 
@@ -81,7 +86,7 @@ def scrape_website(url: str) -> str:
 
     soup = BeautifulSoup(html_content, "html.parser")
 
-    for tag in soup(["script", "style"]):
+    for tag in soup(SCRAPER_STRIP_TAGS):
         tag.decompose()
 
     text = soup.get_text(separator=" ", strip=True)
