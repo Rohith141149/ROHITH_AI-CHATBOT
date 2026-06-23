@@ -1,9 +1,12 @@
 import logging
 import os
+import socket
+from ipaddress import ip_address
+from urllib.parse import urlparse
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from dotenv import load_dotenv
 from groq import Groq
 
@@ -12,6 +15,7 @@ from rag.scraper import (
     ScraperHTTPError,
     ScraperNetworkError,
     ScraperContentError,
+    ScraperSizeError,
 )
 
 load_dotenv()
@@ -27,15 +31,25 @@ if not _groq_api_key:
 
 client = Groq(api_key=_groq_api_key) if _groq_api_key else None
 
-app = FastAPI()
+app = FastAPI(
+    docs_url=None if os.getenv("ENV", "production") == "production" else "/docs",
+    redoc_url=None if os.getenv("ENV", "production") == "production" else "/redoc",
+)
+
+ALLOWED_ORIGINS = os.getenv(
+    "ALLOWED_ORIGINS",
+    "http://localhost:3000"
+).split(",")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=ALLOWED_ORIGINS,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST"],
+    allow_headers=["Content-Type", "Authorization"],
 )
+
+TRAIN_API_KEY = os.getenv("TRAIN_API_KEY")
 
 
 # =========================
@@ -43,11 +57,11 @@ app.add_middleware(
 # =========================
 
 class ChatRequest(BaseModel):
-    message: str
+    message: str = Field(..., min_length=1, max_length=4000)
 
 
 class TrainRequest(BaseModel):
-    url: str
+    url: str = Field(..., max_length=2048)
 
 
 # =========================
@@ -109,10 +123,61 @@ async def chat(req: ChatRequest):
 # TRAIN WEBSITE
 # =========================
 
-@app.post("/train")
-async def train(req: TrainRequest):
+def _validate_url(url: str) -> str:
+    """Validate URL to prevent SSRF attacks."""
+    parsed = urlparse(url)
+
+    if parsed.scheme not in ("http", "https"):
+        raise HTTPException(
+            status_code=400,
+            detail="Only http and https URLs are allowed."
+        )
+
+    hostname = parsed.hostname
+    if not hostname:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid URL: missing hostname."
+        )
+
     try:
-        content = scrape_website(req.url)
+        resolved_ip = socket.gethostbyname(hostname)
+        ip = ip_address(resolved_ip)
+        if ip.is_private or ip.is_loopback or ip.is_reserved:
+            raise HTTPException(
+                status_code=400,
+                detail="URLs pointing to internal/private networks are not allowed."
+            )
+    except socket.gaierror:
+        raise HTTPException(
+            status_code=400,
+            detail="Could not resolve hostname."
+        )
+
+    return url
+
+
+def _verify_train_api_key(req_api_key: str | None = None):
+    """Simple API key check for the train endpoint."""
+    if TRAIN_API_KEY and req_api_key != TRAIN_API_KEY:
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid or missing API key for train endpoint."
+        )
+
+
+class AuthenticatedTrainRequest(BaseModel):
+    url: str = Field(..., max_length=2048)
+    api_key: str | None = Field(None, alias="api_key")
+
+
+@app.post("/train")
+async def train(req: AuthenticatedTrainRequest):
+    _verify_train_api_key(req.api_key)
+    validated_url = _validate_url(req.url)
+
+    try:
+        content = scrape_website(validated_url)
     except ScraperNetworkError as exc:
         logger.warning("Scraper network error for %s: %s", req.url, exc)
         raise HTTPException(
@@ -131,11 +196,19 @@ async def train(req: TrainRequest):
             status_code=422,
             detail=str(exc)
         ) from exc
+    except ScraperSizeError as exc:
+        logger.warning("Response too large from %s: %s", req.url, exc)
+        raise HTTPException(
+            status_code=422,
+            detail=str(exc)
+        ) from exc
+    except HTTPException:
+        raise
     except Exception as exc:
         logger.error("Unexpected error while training on %s: %s", req.url, exc)
         raise HTTPException(
             status_code=500,
-            detail=f"An unexpected error occurred while processing {req.url}"
+            detail="Failed to scrape the provided URL."
         ) from exc
 
     return {

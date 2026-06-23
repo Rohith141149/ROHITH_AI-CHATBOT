@@ -5,6 +5,8 @@ from bs4 import BeautifulSoup
 
 logger = logging.getLogger(__name__)
 
+MAX_RESPONSE_SIZE = 5 * 1024 * 1024  # 5 MB
+
 
 class ScraperError(Exception):
     """Base exception for scraper errors."""
@@ -22,13 +24,22 @@ class ScraperContentError(ScraperError):
     """Raised when the scraped page yields no usable text content."""
 
 
+class ScraperSizeError(ScraperError):
+    """Raised when the response exceeds the maximum allowed size."""
+
+
 def scrape_website(url: str) -> str:
     try:
-        response = requests.get(url, timeout=20)
+        response = requests.get(
+            url,
+            timeout=15,
+            headers={"User-Agent": "RohithAIChatbot/1.0"},
+            stream=True,
+        )
     except requests.exceptions.Timeout:
         logger.error("Request timed out for URL: %s", url)
         raise ScraperNetworkError(
-            f"Request timed out after 20 seconds: {url}"
+            f"Request timed out after 15 seconds: {url}"
         )
     except requests.exceptions.ConnectionError as exc:
         logger.error("Connection failed for URL %s: %s", url, exc)
@@ -54,7 +65,21 @@ def scrape_website(url: str) -> str:
             f"Received HTTP {response.status_code} from {url}"
         )
 
-    soup = BeautifulSoup(response.text, "html.parser")
+    content_length = response.headers.get("Content-Length")
+    if content_length and int(content_length) > MAX_RESPONSE_SIZE:
+        raise ScraperSizeError("Response too large to process.")
+
+    chunks = []
+    size = 0
+    for chunk in response.iter_content(chunk_size=8192, decode_unicode=True):
+        size += len(chunk)
+        if size > MAX_RESPONSE_SIZE:
+            raise ScraperSizeError("Response too large to process.")
+        chunks.append(chunk)
+
+    html_content = "".join(chunks)
+
+    soup = BeautifulSoup(html_content, "html.parser")
 
     for tag in soup(["script", "style"]):
         tag.decompose()
