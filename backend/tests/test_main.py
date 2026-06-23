@@ -1,8 +1,13 @@
+import os
+
 import pytest
 from unittest.mock import patch, MagicMock, AsyncMock
 from httpx import AsyncClient, ASGITransport
 
+os.environ.setdefault("TRAIN_API_KEY", "test-secret-key")
+
 from main import app, ChatRequest, TrainRequest
+from config import TRAIN_API_KEY
 
 
 @pytest.fixture
@@ -72,7 +77,7 @@ class TestChatEndpoint:
             response = await ac.post("/chat", json={"message": "Hi"})
 
         assert response.status_code == 500
-        assert "API error" in response.json()["detail"]
+        assert response.json()["detail"] == "An internal error occurred. Please try again later."
 
     async def test_chat_rejects_missing_message(self, mock_groq_client):
         transport = ASGITransport(app=app)
@@ -97,14 +102,15 @@ class TestChatEndpoint:
 class TestTrainEndpoint:
     """Tests for the POST /train endpoint."""
 
+    @patch("main._validate_url", side_effect=lambda url: url)
     @patch("main.scrape_website")
-    async def test_train_returns_scraped_content(self, mock_scrape):
+    async def test_train_returns_scraped_content(self, mock_scrape, mock_validate):
         mock_scrape.return_value = "Hello " * 500  # 3000 chars
 
         transport = ASGITransport(app=app)
         async with AsyncClient(transport=transport, base_url="http://test") as ac:
             response = await ac.post(
-                "/train", json={"url": "https://example.com"}
+                "/train", json={"url": "https://example.com", "api_key": TRAIN_API_KEY}
             )
 
         assert response.status_code == 200
@@ -113,30 +119,32 @@ class TestTrainEndpoint:
         assert data["characters"] == 3000
         assert len(data["preview"]) <= 1000
 
+    @patch("main._validate_url", side_effect=lambda url: url)
     @patch("main.scrape_website")
-    async def test_train_calls_scraper_with_url(self, mock_scrape):
+    async def test_train_calls_scraper_with_url(self, mock_scrape, mock_validate):
         mock_scrape.return_value = "content"
 
         transport = ASGITransport(app=app)
         async with AsyncClient(transport=transport, base_url="http://test") as ac:
             await ac.post(
-                "/train", json={"url": "https://example.com"}
+                "/train", json={"url": "https://example.com", "api_key": TRAIN_API_KEY}
             )
 
         mock_scrape.assert_called_once_with("https://example.com")
 
+    @patch("main._validate_url", side_effect=lambda url: url)
     @patch("main.scrape_website")
-    async def test_train_returns_500_on_scraper_error(self, mock_scrape):
+    async def test_train_returns_500_on_scraper_error(self, mock_scrape, mock_validate):
         mock_scrape.side_effect = Exception("Scraping failed")
 
         transport = ASGITransport(app=app)
         async with AsyncClient(transport=transport, base_url="http://test") as ac:
             response = await ac.post(
-                "/train", json={"url": "https://example.com"}
+                "/train", json={"url": "https://example.com", "api_key": TRAIN_API_KEY}
             )
 
         assert response.status_code == 500
-        assert "Scraping failed" in response.json()["detail"]
+        assert response.json()["detail"] == "An internal error occurred. Please try again later."
 
     async def test_train_rejects_missing_url(self):
         transport = ASGITransport(app=app)
@@ -145,19 +153,40 @@ class TestTrainEndpoint:
 
         assert response.status_code == 422
 
+    @patch("main._validate_url", side_effect=lambda url: url)
     @patch("main.scrape_website")
-    async def test_train_preview_limited_to_1000_chars(self, mock_scrape):
+    async def test_train_preview_limited_to_1000_chars(self, mock_scrape, mock_validate):
         mock_scrape.return_value = "x" * 5000
 
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as ac:
+            response = await ac.post(
+                "/train", json={"url": "https://example.com", "api_key": TRAIN_API_KEY}
+            )
+
+        data = response.json()
+        assert len(data["preview"]) == 1000
+        assert data["characters"] == 5000
+
+    async def test_train_rejects_missing_api_key(self):
         transport = ASGITransport(app=app)
         async with AsyncClient(transport=transport, base_url="http://test") as ac:
             response = await ac.post(
                 "/train", json={"url": "https://example.com"}
             )
 
-        data = response.json()
-        assert len(data["preview"]) == 1000
-        assert data["characters"] == 5000
+        assert response.status_code == 401
+        assert "Invalid or missing API key" in response.json()["detail"]
+
+    async def test_train_rejects_wrong_api_key(self):
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as ac:
+            response = await ac.post(
+                "/train", json={"url": "https://example.com", "api_key": "wrong-key"}
+            )
+
+        assert response.status_code == 401
+        assert "Invalid or missing API key" in response.json()["detail"]
 
 
 class TestModels:
