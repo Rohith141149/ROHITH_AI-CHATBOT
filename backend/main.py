@@ -5,6 +5,8 @@ from urllib.parse import urlparse
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from groq import Groq
+from typing import Literal
+
 from pydantic import BaseModel, Field
 
 from config import (
@@ -40,8 +42,13 @@ app.add_middleware(
 # =========================
 
 
+class ChatMessage(BaseModel):
+    role: Literal["user", "assistant"]
+    content: str = Field(..., min_length=1, max_length=4000)
+
+
 class ChatRequest(BaseModel):
-    message: str = Field(..., min_length=1, max_length=4000)
+    messages: list[ChatMessage] = Field(..., min_length=1)
 
 
 class TrainRequest(BaseModel):
@@ -71,9 +78,13 @@ async def home():
 @app.post("/chat")
 @handle_endpoint_errors
 async def chat(req: ChatRequest):
+    conversation = [
+        {"role": m.role, "content": m.content}
+        for m in req.messages
+    ]
     completion = client.chat.completions.create(
         model=GROQ_MODEL,
-        messages=[{"role": "user", "content": req.message}],
+        messages=conversation,
         temperature=GROQ_TEMPERATURE,
         max_tokens=GROQ_MAX_TOKENS,
     )

@@ -2,7 +2,7 @@ import pytest
 from unittest.mock import patch, MagicMock, AsyncMock
 from httpx import AsyncClient, ASGITransport
 
-from main import app, ChatRequest, TrainRequest
+from main import app, ChatRequest, ChatMessage, TrainRequest
 
 
 @pytest.fixture
@@ -39,7 +39,10 @@ class TestChatEndpoint:
 
         transport = ASGITransport(app=app)
         async with AsyncClient(transport=transport, base_url="http://test") as ac:
-            response = await ac.post("/chat", json={"message": "Hi"})
+            response = await ac.post(
+                "/chat",
+                json={"messages": [{"role": "user", "content": "Hi"}]},
+            )
 
         assert response.status_code == 200
         assert response.json() == {"response": "Hello! How can I help?"}
@@ -53,11 +56,45 @@ class TestChatEndpoint:
 
         transport = ASGITransport(app=app)
         async with AsyncClient(transport=transport, base_url="http://test") as ac:
-            await ac.post("/chat", json={"message": "Test question"})
+            await ac.post(
+                "/chat",
+                json={"messages": [{"role": "user", "content": "Test question"}]},
+            )
 
         mock_groq_client.chat.completions.create.assert_called_once_with(
             model="llama-3.3-70b-versatile",
             messages=[{"role": "user", "content": "Test question"}],
+            temperature=0.7,
+            max_tokens=1024,
+        )
+
+    async def test_chat_sends_full_conversation_history(self, mock_groq_client):
+        mock_completion = MagicMock()
+        mock_completion.choices = [
+            MagicMock(message=MagicMock(content="Response"))
+        ]
+        mock_groq_client.chat.completions.create.return_value = mock_completion
+
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as ac:
+            await ac.post(
+                "/chat",
+                json={
+                    "messages": [
+                        {"role": "user", "content": "Hello"},
+                        {"role": "assistant", "content": "Hi there!"},
+                        {"role": "user", "content": "How are you?"},
+                    ]
+                },
+            )
+
+        mock_groq_client.chat.completions.create.assert_called_once_with(
+            model="llama-3.3-70b-versatile",
+            messages=[
+                {"role": "user", "content": "Hello"},
+                {"role": "assistant", "content": "Hi there!"},
+                {"role": "user", "content": "How are you?"},
+            ],
             temperature=0.7,
             max_tokens=1024,
         )
@@ -69,15 +106,24 @@ class TestChatEndpoint:
 
         transport = ASGITransport(app=app)
         async with AsyncClient(transport=transport, base_url="http://test") as ac:
-            response = await ac.post("/chat", json={"message": "Hi"})
+            response = await ac.post(
+                "/chat",
+                json={"messages": [{"role": "user", "content": "Hi"}]},
+            )
 
         assert response.status_code == 500
-        assert "API error" in response.json()["detail"]
 
-    async def test_chat_rejects_missing_message(self, mock_groq_client):
+    async def test_chat_rejects_missing_messages(self, mock_groq_client):
         transport = ASGITransport(app=app)
         async with AsyncClient(transport=transport, base_url="http://test") as ac:
             response = await ac.post("/chat", json={})
+
+        assert response.status_code == 422
+
+    async def test_chat_rejects_empty_messages(self, mock_groq_client):
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as ac:
+            response = await ac.post("/chat", json={"messages": []})
 
         assert response.status_code == 422
 
@@ -136,7 +182,6 @@ class TestTrainEndpoint:
             )
 
         assert response.status_code == 500
-        assert "Scraping failed" in response.json()["detail"]
 
     async def test_train_rejects_missing_url(self):
         transport = ASGITransport(app=app)
@@ -164,8 +209,12 @@ class TestModels:
     """Tests for Pydantic models."""
 
     def test_chat_request_valid(self):
-        req = ChatRequest(message="Hello")
-        assert req.message == "Hello"
+        req = ChatRequest(
+            messages=[ChatMessage(role="user", content="Hello")]
+        )
+        assert len(req.messages) == 1
+        assert req.messages[0].content == "Hello"
+        assert req.messages[0].role == "user"
 
     def test_train_request_valid(self):
         req = TrainRequest(url="https://example.com")

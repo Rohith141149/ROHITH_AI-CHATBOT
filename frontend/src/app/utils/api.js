@@ -6,5 +6,13 @@ export async function postChat(messages) {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ messages }),
   });
+
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => null);
+    throw new Error(
+      errorData?.detail || `Server error (${response.status})`
+    );
+  }
+
   return response.json();
 }
