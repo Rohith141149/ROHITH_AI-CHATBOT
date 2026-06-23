@@ -1,3 +1,4 @@
+import logging
 import socket
 from ipaddress import ip_address
 from urllib.parse import urlparse
@@ -16,10 +17,23 @@ from config import (
     GROQ_TEMPERATURE,
     TRAIN_API_KEY,
 )
-from rag.scraper import scrape_website
-from utils import content_summary, handle_endpoint_errors
+from rag.scraper import (
+    scrape_website,
+    ScraperHTTPError,
+    ScraperNetworkError,
+    ScraperContentError,
+    ScraperSizeError,
+)
+from utils import content_summary
 
-client = Groq(api_key=GROQ_API_KEY)
+logger = logging.getLogger(__name__)
+
+if not GROQ_API_KEY:
+    logger.warning(
+        "GROQ_API_KEY is not set. The /chat endpoint will be unavailable."
+    )
+
+client = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
 
 app = FastAPI(
     docs_url=None if ENV == "production" else "/docs",
@@ -69,14 +83,37 @@ async def home():
 
 
 @app.post("/chat")
-@handle_endpoint_errors
 async def chat(req: ChatRequest):
-    completion = client.chat.completions.create(
-        model=GROQ_MODEL,
-        messages=[{"role": "user", "content": req.message}],
-        temperature=GROQ_TEMPERATURE,
-        max_tokens=GROQ_MAX_TOKENS,
-    )
+    if client is None:
+        logger.error("Chat request received but GROQ_API_KEY is not configured")
+        raise HTTPException(
+            status_code=503,
+            detail="Chat service is unavailable: GROQ_API_KEY is not configured.",
+        )
+
+    try:
+        completion = client.chat.completions.create(
+            model=GROQ_MODEL,
+            messages=[{"role": "user", "content": req.message}],
+            temperature=GROQ_TEMPERATURE,
+            max_tokens=GROQ_MAX_TOKENS,
+        )
+    except Exception as exc:
+        logger.error("Groq API call failed: %s", exc)
+        raise HTTPException(
+            status_code=502,
+            detail=f"AI service request failed: {exc}",
+        ) from exc
+
+    if not completion.choices:
+        logger.error(
+            "Groq API returned empty choices for message: %s", req.message[:50]
+        )
+        raise HTTPException(
+            status_code=502,
+            detail="AI service returned an empty response.",
+        )
+
     return {"response": completion.choices[0].message.content}
 
 
@@ -129,9 +166,31 @@ def _verify_train_api_key(req_api_key: str | None = None):
 
 
 @app.post("/train")
-@handle_endpoint_errors
 async def train(req: AuthenticatedTrainRequest):
     _verify_train_api_key(req.api_key)
     validated_url = _validate_url(req.url)
-    content = scrape_website(validated_url)
+
+    try:
+        content = scrape_website(validated_url)
+    except ScraperNetworkError as exc:
+        logger.warning("Scraper network error for %s: %s", req.url, exc)
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except ScraperHTTPError as exc:
+        logger.warning("Scraper HTTP error for %s: %s", req.url, exc)
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except ScraperContentError as exc:
+        logger.warning("No content extracted from %s: %s", req.url, exc)
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except ScraperSizeError as exc:
+        logger.warning("Response too large from %s: %s", req.url, exc)
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error("Unexpected error while training on %s: %s", req.url, exc)
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to scrape the provided URL.",
+        ) from exc
+
     return {"status": "success", **content_summary(content)}

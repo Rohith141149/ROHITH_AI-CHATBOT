@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useRef, useEffect } from "react";
-import { postChat } from "./utils/api";
+import { postChat, ApiError } from "./utils/api";
 import {
   createUserMessage,
   createAssistantMessage,
@@ -45,10 +45,21 @@ export default function Home() {
       const data = await postChat(conversationHistory);
       setMessages((prev) => [...prev, createAssistantMessage(data.response)]);
     } catch (error) {
-      console.error(error);
+      console.error("Chat error:", error);
+
+      let errorText;
+      if (error instanceof ApiError) {
+        errorText = error.message;
+      } else if (error instanceof TypeError) {
+        errorText =
+          "Unable to connect to the backend. Please check if the server is running.";
+      } else {
+        errorText = error.message || "An unexpected error occurred.";
+      }
+
       setMessages((prev) => [
         ...prev,
-        createAssistantMessage("Unable to connect to backend."),
+        createAssistantMessage(errorText),
       ]);
     } finally {
       setLoading(false);

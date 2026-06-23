@@ -9,7 +9,11 @@ logger = logging.getLogger(__name__)
 
 
 def handle_endpoint_errors(func):
-    """Decorator that wraps endpoint logic with consistent error handling."""
+    """Decorator that wraps endpoint logic with consistent error handling.
+
+    Re-raises HTTPException untouched. All other exceptions are logged
+    and converted to a 500 with a safe, non-leaking error message.
+    """
 
     @functools.wraps(func)
     async def wrapper(*args, **kwargs):
@@ -17,12 +21,17 @@ def handle_endpoint_errors(func):
             return await func(*args, **kwargs)
         except HTTPException:
             raise
-        except Exception as e:
-            logger.exception("%s endpoint error", func.__name__)
+        except Exception as exc:
+            logger.exception(
+                "%s endpoint error: %s: %s",
+                func.__name__,
+                type(exc).__name__,
+                exc,
+            )
             raise HTTPException(
                 status_code=500,
                 detail="An internal error occurred. Please try again later.",
-            )
+            ) from exc
 
     return wrapper
 
